@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fullscreen Satellite Map — Simple Pins (No Clustering)</title>
+  <!--
+    ============================
+    WHAT THIS FILE DOES
+    ============================
+    • Renders a 100% fullscreen, interactive satellite map using Leaflet (no build tools required).
+    • Places clickable pins (no clustering). Each pin:
+        - shows a HOVER LABEL (tooltip) on mouseover
+        - opens a POPUP on click with a customizable title + optional link
+    • Keeps the document extremely minimal, with defensive guards so overlays can't block clicks.
+
+    ============================
+    HOW TO CUSTOMIZE (TL;DR)
+    ============================
+    1) Change COLORS:
+       - In CSS below, tweak circleMarker colors in JS (search for STYLE object).
+    2) Change BASEMAP (satellite vs others):
+       - In JS: the L.tileLayer(...) call. Example alternatives are in comments.
+    3) Add/Change PINS:
+       - Edit the `items` array in JS. Each pin can have: name, coords [lat,lng], url (optional), tooltip (optional), color overrides (optional).
+    4) Hover label behavior:
+       - Uses `marker.bindTooltip(...)` (on hover). Set `{ permanent: true }` to keep labels always visible.
+    5) Popup link:
+       - Include `url` in the item; the popup renders an <a> link if provided.
+
+    ============================
+    QUICK TROUBLESHOOTING
+    ============================
+    • If clicks don't work, ensure there is ONLY ONE <div id="map"> in the DOM.
+      This file includes a small guard to remove accidental duplicates in some editors.
+    • If embedded in a page builder/iframe, make sure scripts are allowed to run.
+  -->
+
+  <!-- Leaflet core CSS (required) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <style>
+    /* === Fullscreen layout === */
+    html, body, #map { height: 100%; margin: 0; }
+    body { background: #000; overflow: hidden; }
+
+    /* The map container fills the entire viewport */
+    #map { position: fixed; inset: 0; z-index: 0; pointer-events: auto; }
+
+    /* Safety: hide any accidental siblings that might overlay the map */
+    body > *:not(#map) { display: none; }
+
+    /* Optional: make the default attribution readable on dark bg */
+    .leaflet-control-attribution{
+      background: rgba(0,0,0,.35);
+      backdrop-filter: blur(4px);
+      color:#fff;
+    }
+  </style>
+</head>
+<body>
+  <!-- The ONLY map element (the JS will guard against duplicates) -->
+  <div id="map" aria-label="Client map" tabindex="0"></div>
+
+  <!-- Leaflet core JS (required). No other libraries used. -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+
+  <script>
+    // Run after the document is parsed (and Leaflet is loaded via `defer`)
+    window.addEventListener('DOMContentLoaded', () => {
+      // ------------------------------------------------------------------
+      // 0) SAFETY GUARD: ensure there's exactly one #map element
+      // Some editors/embeds duplicate blocks; a second overlay would swallow clicks.
+      // ------------------------------------------------------------------
+      const maps = document.querySelectorAll('#map');
+      if (maps.length !== 1) {
+        maps.forEach((el, i) => { if (i > 0) el.remove(); });
+      }
+
+      // ------------------------------------------------------------------
+      // 1) VISUAL STYLE CONTROLS — tweak these to change colors & sizes
+      // ------------------------------------------------------------------
+      const STYLE = {
+        // Marker sizes: markers start at MAX and shrink when zooming out (non‑linear),
+        // but never go below MIN. Tweak these to taste.
+        markerRadius: 8,          // kept for backwards-compat (treated as max)
+        markerMaxRadius: 9,       // maximum size at close-in zooms
+        markerMinRadius: 2,       // minimum size at far-out zooms
+
+        // Colors
+        markerStroke: '#ffffff',       // pin outline color
+        markerStrokeWidth: 1,          // pin outline thickness
+        markerFill: '#38bdf8',         // pin fill color
+        markerFillOpacity: 0.95,       // pin fill opacity
+
+        // UI
+        tooltipBg: 'rgba(10, 14, 22, 0.9)',
+        popupMaxWidth: 260
+      };
+
+      // If you want per-pin overrides, each item can set its own: fill, stroke, radius, etc.
+
+      // ------------------------------------------------------------------
+      // 2) CREATE THE MAP (Leaflet)
+      // ------------------------------------------------------------------
+      const map = L.map('map', {
+        zoomControl: true,        // show +/− buttons
+        scrollWheelZoom: true,    // allow wheel zoom
+        attributionControl: true, // legal attribution
+        tapTolerance: 20          // helps with mobile taps
+      });
+
+      // ---- Basemap: SATELLITE (Esri World Imagery) ----
+      // Keep attribution; change maxZoom if you use a different provider.
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
+          maxZoom: 19
+        }
+      ).addTo(map);
+
+      // --- Alternative basemaps (uncomment ONE if you want a different look) ---
+      // OpenStreetMap (cartographic, not satellite):
+      // L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      //   attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
+      // }).addTo(map);
+
+      // Stamen Toner Lite (light monochrome):
+      // L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner-lite/{z}/{x}/{y}.png', {
+      //   attribution: 'Map tiles by Stamen; Data © OpenStreetMap', maxZoom: 20
+      // }).addTo(map);
+
+      // ------------------------------------------------------------------
+      // 3) YOUR DATA — add or edit pins here
+      //    • name: string shown in tooltip/popup
+      //    • coords: [lat, lng]
+      //    • url (optional): link shown in popup; remove or leave empty to hide
+      //    • tooltip (optional): custom hover text (defaults to name)
+      //    • style (optional): per-pin overrides { fill, stroke, radius, weight }
+      // ------------------------------------------------------------------
+      const items = [
+{ name: '1', coords: [45.4385, 10.9924], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Associazione-Sportiva-Scaligera.pdf', tooltip: 'Associazione Sportiva Scaligera' },
+{ name: '2', coords: [42.0474, 13.9270], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Cronometristi-Sulmona-Sci-Club-Sulmona.pdf', tooltip: 'Cronometristi Sulmona Sci Club Sulmona' },
+{ name: '3', coords: [43.4611, 12.7043], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Monte-Catria-impiantisti.pdf', tooltip: 'Monte Catria impiantisti' },
+{ name: '4', coords: [41.7270, 13.0041], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Colleferro.pdf', tooltip: 'Sci Club Colleferro' },
+{ name: '5', coords: [41.9963, 12.6236], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Czero-6.pdf', tooltip: 'Sci Club Czero 6' },
+{ name: '6', coords: [42.2250, 13.4000], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Il-Lupo-Scuola-Sci-Campo-Felice.pdf', tooltip: 'Sci Club Il Lupo Scuola Sci Campo Felice' },
+{ name: '7', coords: [40.8522, 14.2681], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Napoli.pdf', tooltip: 'Sci Club Napoli' },
+{ name: '8', coords: [43.7149, 13.2179], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Senigallia.pdf', tooltip: 'Sci Club Senigallia' },
+{ name: '9', coords: [42.4733, 12.9974], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Terminillo.pdf', tooltip: 'Sci Club Terminillo' },
+{ name: '10', coords: [42.4170, 12.1000], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Viterbo.pdf', tooltip: 'Sci Club Viterbo' },
+{ name: '11', coords: [42.2160, 13.5500], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Sci-Muccilli.pdf', tooltip: 'Scuola Sci Muccilli' },
+{ name: '12', coords: [42.2190, 13.4330], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Ski-Team-Le-Rocche.pdf', tooltip: 'Ski Team Le Rocche' },
+{ name: '13', coords: [37.6089, 15.1658], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Vulkano-Ski-Race.pdf', tooltip: 'Vulkano Ski Race' },
+{ name: '14', coords: [46.3761, 9.3566], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Alpe-Motta-Ski-Team-Sci-Club-Alaska.pdf', tooltip: 'Alpe Motta Ski Team Sci Club Alaska' },
+{ name: '15', coords: [45.9765, 9.5659], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/ASD-Piazzatorre.pdf', tooltip: 'ASD Piazzatorre' },
+{ name: '16', coords: [44.2567, 10.7800], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Consorzio-Stazione-Invernale-Cimone.pdf', tooltip: 'Consorzio Stazione Invernale Cimone' },
+{ name: '17', coords: [45.1333, 10.0212], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Cremona-Ski-Team-CASC-Cremona.pdf', tooltip: 'Cremona Ski Team CASC Cremona' },
+{ name: '18', coords: [43.9333, 10.9167], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Cronometristi-Pistoia.pdf', tooltip: 'Cronometristi Pistoia' },
+{ name: '19', coords: [45.8140, 10.2850], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Dinimast-Ski-School-White-Passion-Scuola-Italiana-Sci-Maniva.pdf', tooltip: 'Dinimast Ski School White Passion Scuola Italiana Sci Maniva' },
+{ name: '20', coords: [44.3067, 10.7823], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Frignano-Ski-Team.pdf', tooltip: 'Frignano Ski Team' },
+{ name: '21', coords: [44.4949, 11.3426], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/G.A.S.T.pdf', tooltip: 'G.A.S.T' },
+{ name: '22', coords: [45.8197, 9.8471], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/GAV-Vertova.pdf', tooltip: 'GAV Vertova' },
+{ name: '23', coords: [44.3420, 10.6810], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Ranch-Balla-coi-Lupi.pdf', tooltip: 'Ranch Balla coi Lupi' },
+{ name: '24', coords: [45.8290, 9.2930], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-CAI-Canzo.pdf', tooltip: 'Sci CAI Canzo' },
+{ name: '25', coords: [45.4642, 10.7566], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Benaco.pdf', tooltip: 'Sci Club Benaco' },
+{ name: '26', coords: [46.1690, 10.3244], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-CAI-Edolo.pdf', tooltip: 'Sci Club CAI Edolo' },
+{ name: '27', coords: [45.7085, 9.2144], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Carugo.pdf', tooltip: 'Sci Club Carugo' },
+{ name: '28', coords: [45.6500, 9.9000], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Clan2.pdf', tooltip: 'Sci Club Clan2' },
+{ name: '29', coords: [43.9956, 12.5650], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Coriano.pdf', tooltip: 'Sci Club Coriano' },
+{ name: '30', coords: [45.7380, 10.3300], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Crocedomini.pdf', tooltip: 'Sci Club Crocedomini' },
+{ name: '31', coords: [44.1240, 10.7730], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Doganaccia-Scuola-Sci-Doganaccia.pdf', tooltip: 'Sci Club Doganaccia Scuola Sci Doganaccia' },
+{ name: '32', coords: [43.7165, 10.9489], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Empoli.pdf', tooltip: 'Sci Club Empoli' },
+{ name: '33', coords: [44.1862, 10.6620], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Fiumalbo.pdf', tooltip: 'Sci Club Fiumalbo' },
+{ name: '34', coords: [45.9000, 9.9330], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Gromo.pdf', tooltip: 'Sci Club Gromo' },
+{ name: '35', coords: [45.7465, 9.2689], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-La-Torre.pdf', tooltip: 'Sci Club La Torre' },
+{ name: '36', coords: [45.5925, 8.7766], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Lonate-Pozzolo.pdf', tooltip: 'Sci Club Lonate Pozzolo' },
+{ name: '37', coords: [44.2580, 10.5147], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Lupi-di-Civago.pdf', tooltip: 'Sci Club Lupi di Civago' },
+{ name: '38', coords: [45.8588, 9.9016], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Ponte-Nossa.pdf', tooltip: 'Sci Club Ponte Nossa' },
+{ name: '39', coords: [44.3769, 9.8787], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Pontremoli.pdf', tooltip: 'Sci Club Pontremoli' },
+{ name: '40', coords: [44.4723, 10.0794], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Prato-Spilla.pdf', tooltip: 'Sci Club Prato Spilla' },
+{ name: '41', coords: [45.7540, 10.3150], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Rongai-ValPalot-Ski.pdf', tooltip: 'Sci Club Rongai ValPalot Ski' },
+{ name: '42', coords: [44.4750, 10.6500], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Roteglia.pdf', tooltip: 'Sci Club Roteglia' },
+{ name: '43', coords: [45.8660, 9.9870], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Rovetta.pdf', tooltip: 'Sci Club Rovetta' },
+{ name: '44', coords: [43.8800, 11.0983], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Tracce-Bianche.pdf', tooltip: 'Sci Club Tracce Bianche' },
+{ name: '45', coords: [44.7925, 9.7185], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Val-dArda.pdf', tooltip: 'Sci Club Val dArda' },
+{ name: '46', coords: [45.9850, 10.0075], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Valle-di-Scalve.pdf', tooltip: 'Sci Club Valle di Scalve' },
+{ name: '47', coords: [45.8330, 9.7830], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Valserina.pdf', tooltip: 'Sci Club Valserina' },
+{ name: '48', coords: [44.1490, 10.6760], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Snowboard-Gap-Abetone.pdf', tooltip: 'Scuola Snowboard Gap Abetone' },
+{ name: '49', coords: [45.1564, 10.7914], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sportime-Mantova.pdf', tooltip: 'Sportime Mantova' },
+{ name: '50', coords: [46.1540, 10.1510], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/STT-Ski-Tennis-Training-Aprica.pdf', tooltip: 'STT Ski Tennis Training Aprica' },
+{ name: '51', coords: [46.0590, 9.5630], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Valli-del-Bitto-Ski-Team.pdf', tooltip: 'Valli del Bitto Ski Team' },
+{ name: '52', coords: [45.8680, 9.2930], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Valassina-Ski-Team-Sci-Club-Alta-Valassina.pdf', tooltip: 'Valassina Ski Team Sci Club Alta Valassina' },
+{ name: '53', coords: [43.9532, 10.2270], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Versilia-Ski-Team.pdf', tooltip: 'Versilia Ski Team' },
+{ name: '54', coords: [42.8680, 11.5390], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Castel-Del-Piano.pdf', tooltip: 'Sci Club Castel Del Piano' },
+{ name: '55', coords: [45.9355, 7.6228], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Cervino-Sports-Academy-Sci-Club-Monte-Cervino.pdf', tooltip: 'Cervino Sports Academy Sci Club Monte Cervino' },
+{ name: '56', coords: [45.8830, 7.6220], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Club-de-Ski-Valtournenche.pdf', tooltip: 'Club de Ski Valtournenche' },
+{ name: '57', coords: [45.7900, 6.9680], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/College-Courmayeur.pdf', tooltip: 'College Courmayeur' },
+{ name: '58', coords: [46.1147, 8.2967], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Domobianca.pdf', tooltip: 'Domobianca' },
+{ name: '59', coords: [45.9211, 8.5510], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Gruppo-Verbanese-Sciatori-Ciechi.pdf', tooltip: 'Gruppo Verbanese Sciatori Ciechi' },
+{ name: '60', coords: [45.4672, 7.8710], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Canavese.pdf', tooltip: 'Sci Club Canavese' },
+{ name: '61', coords: [45.8539, 7.6200], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Chamois.pdf', tooltip: 'Sci Club Chamois' },
+{ name: '62', coords: [44.2470, 7.3940], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Entracque-Scuola-Sci-Entracque.pdf', tooltip: 'Sci Club Entracque Scuola Sci Entracque' },
+{ name: '63', coords: [44.6517, 7.8582], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Garesio-Sport.pdf', tooltip: 'Sci Club Garesio Sport' },
+{ name: '64', coords: [45.5400, 7.2660], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Granta-Parey.pdf', tooltip: 'Sci Club Granta Parey' },
+{ name: '65', coords: [45.4000, 7.3330], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Verdefondo.pdf', tooltip: 'Sci Club Verdefondo' },
+{ name: '66', coords: [44.9422, 6.7498], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Scuola-Sci-Claviere.pdf', tooltip: 'Scuola Sci Claviere' },
+{ name: '67', coords: [45.8538, 7.9479], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Ski-Academy-Alagna-Monterosa.pdf', tooltip: 'Ski Academy Alagna Monterosa' },
+{ name: '68', coords: [44.9590, 6.8781], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/SPS-Sicurezza-Piste-Sestriere.pdf', tooltip: 'SPS Sicurezza Piste Sestriere' },
+{ name: '69', coords: [45.6503, 13.7703], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Banca-Generali.pdf', tooltip: 'Sci Club Banca Generali' },
+{ name: '70', coords: [45.4669, 9.1900], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Unicredit.pdf', tooltip: 'Unicredit' },
+{ name: '71', coords: [45.6950, 9.6700], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Zanetti-Goggi.pdf', tooltip: 'Sci Club Zanetti Goggi' },
+{ name: '72', coords: [46.2596, 10.5065], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Ponte-Di-Legno.pdf', tooltip: 'Sci Club Ponte Di Legno' },
+{ name: '73', coords: [43.9361, 12.4465], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/San-Marino.pdf', tooltip: 'San Marino' },
+{ name: '74', coords: [46.1540, 10.1500], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Aprica.pdf', tooltip: 'Aprica' },
+{ name: '75', coords: [46.4690, 10.3700], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Bormio.pdf', tooltip: 'Bormio' },
+{ name: '76', coords: [46.4525, 9.3639], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Circolo-Sciatori-Madesimo.pdf', tooltip: 'Circolo Sciatori Madesimo' },
+{ name: '77', coords: [46.5405, 10.1381], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Livigno.pdf', tooltip: 'Livigno' },
+{ name: '78', coords: [46.4047, 10.4942], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Santa-Caterina-Valfurva.pdf', tooltip: 'Santa Caterina Valfurva' },
+{ name: '79', coords: [46.3742, 9.3806], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Campodolcino.pdf', tooltip: 'Sci Club Campodolcino' },
+{ name: '80', coords: [46.1525, 9.4023], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Delebio.pdf', tooltip: 'Sci Club Delebio' },
+{ name: '81', coords: [46.2747, 9.8515], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Valmalenco.pdf', tooltip: 'Sci Club Valmalenco' },
+{ name: '82', coords: [46.5314, 10.4522], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Sci-Pirovano.pdf', tooltip: 'Scuola Sci Pirovano' },
+{ name: '83', coords: [46.0839, 12.0432], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/A.s.d.-Sci-Club-980.pdf', tooltip: 'A.s.d. Sci Club 980' },
+{ name: '84', coords: [45.6493, 11.7883], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/ADM-Cittadella.pdf', tooltip: 'ADM Cittadella' },
+{ name: '85', coords: [46.1644, 13.2326], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Alpinismo-Friuliano-Tricesimo.pdf', tooltip: 'Alpinismo Friuliano Tricesimo' },
+{ name: '86', coords: [46.5405, 12.1355], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/BeFree-Cortina-Scuola-Sci-Azzurra-Cortina.pdf', tooltip: 'BeFree Cortina Scuola Sci Azzurra Cortina' },
+{ name: '87', coords: [46.0152, 11.9065], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Dynamo-Vellai.pdf', tooltip: 'Dynamo Vellai' },
+{ name: '88', coords: [46.5074, 13.5881], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Orsetti-Tarvisio-Sci-CAI-Monte-Lussari-US-Camporosso.pdf', tooltip: 'Orsetti Tarvisio Sci CAI Monte Lussari US Camporosso' },
+{ name: '89', coords: [46.3690, 12.1440], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Pelmo-Ski-Team.pdf', tooltip: 'Pelmo Ski Team' },
+{ name: '90', coords: [46.0779, 12.5740], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Piancavallo-A2K-Racing-Team.pdf', tooltip: 'Piancavallo A2K Racing Team' },
+{ name: '91', coords: [45.7117, 11.3574], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Piccole-Dolomiti-Ski-Team-CAI-Schio.pdf', tooltip: 'Piccole Dolomiti Ski Team CAI Schio' },
+{ name: '92', coords: [45.5100, 11.3926], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-CAI-Montecchio.pdf', tooltip: 'Sci CAI Montecchio' },
+{ name: '93', coords: [45.9389, 13.3948], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-3-Comuni.pdf', tooltip: 'Sci Club 3 Comuni' },
+{ name: '94', coords: [45.8920, 11.4770], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-3-Campanili-di-Roana.pdf', tooltip: 'Sci Club 3 Campanili di Roana' },
+{ name: '95', coords: [45.6764, 11.9293], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Castelfranco-Veneto.pdf', tooltip: 'Sci Club Castelfranco Veneto' },
+{ name: '96', coords: [45.5211, 11.2339], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Chiampo.pdf', tooltip: 'Sci Club Chiampo' },
+{ name: '97', coords: [45.8342, 12.0347], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Cornuda.pdf', tooltip: 'Sci Club Cornuda' },
+{ name: '98', coords: [46.0034, 11.8737], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Croce-dAune.pdf', tooltip: 'Sci Club Croce dAune' },
+{ name: '99', coords: [45.6281, 12.3748], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-il-Castello.pdf', tooltip: 'Sci Club il Castello' },
+{ name: '100', coords: [46.1300, 12.1870], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Limana.pdf', tooltip: 'Sci Club Limana' },
+{ name: '101', coords: [45.4810, 12.2280], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Mestre.pdf', tooltip: 'Sci Club Mestre' },
+{ name: '102', coords: [45.9125, 12.1251], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/SK-Club-Miane.pdf', tooltip: 'SK Club Miane' },
+{ name: '103', coords: [46.0330, 12.1000], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Trichiana.pdf', tooltip: 'Sci Club Trichiana' },
+{ name: '104', coords: [45.6503, 13.7703], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-XXX-Ottobre.pdf', tooltip: 'Sci Club XXX Ottobre' },
+{ name: '105', coords: [45.7730, 11.3250], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Sci-Fondo-Tonezza.pdf', tooltip: 'Scuola Sci Fondo Tonezza' },
+{ name: '106', coords: [45.6503, 13.7703], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/SK-Devin.pdf', tooltip: 'SK Devin' },
+{ name: '107', coords: [46.3600, 11.4500], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/A.S.C.-Eggen.pdf', tooltip: 'A.S.C. Eggen' },
+{ name: '108', coords: [45.9110, 11.1850], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Alpe-Cimbra-Ski-Team-Scie-di-Passione-Crazy-Rabbit.pdf', tooltip: 'Alpe Cimbra Ski Team Scie di Passione Crazy Rabbit' },
+{ name: '109', coords: [46.0667, 11.1167], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Assokronos-Trento.pdf', tooltip: 'Assokronos Trento' },
+{ name: '110', coords: [46.4150, 11.4890], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/ASV-Deutschnofen.pdf', tooltip: 'ASV Deutschnofen' },
+{ name: '111', coords: [46.5390, 11.4570], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/ASV-Ritten.pdf', tooltip: 'ASV Ritten' },
+{ name: '112', coords: [46.3790, 11.2470], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/ASV-Tramin.pdf', tooltip: 'ASV Tramin' },
+{ name: '113', coords: [46.6300, 11.5140], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/ASV-Villanders.pdf', tooltip: 'ASV Villanders' },
+{ name: '114', coords: [46.8180, 11.6850], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/ASV-Vintl.pdf', tooltip: 'ASV Vintl' },
+{ name: '115', coords: [46.4983, 11.3548], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Croce-Bianca-Bolzano.pdf', tooltip: 'Croce Bianca Bolzano' },
+{ name: '116', coords: [46.4350, 11.2500], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Eppan-Ski.pdf', tooltip: 'Eppan Ski' },
+{ name: '117', coords: [45.3833, 10.8833], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Gruppo-Amici-Sciatori-Sommacampagna.pdf', tooltip: 'Gruppo Amici Sciatori Sommacampagna' },
+{ name: '118', coords: [45.8990, 10.6610], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Gruppo-Sci-Lodrone.pdf', tooltip: 'Gruppo Sci Lodrone' },
+{ name: '119', coords: [45.9350, 11.3040], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Impiantisti-Lavarone-Gruppo-Sportivo-VVF-Lavarone.pdf', tooltip: 'Impiantisti Lavarone Gruppo Sportivo VVF Lavarone' },
+{ name: '120', coords: [46.4370, 11.3350], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Polisportiva-Pineta.pdf', tooltip: 'Polisportiva Pineta' },
+{ name: '121', coords: [46.0700, 11.1190], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/07/Revolution-Sport-Academy.pdf', tooltip: 'Revolution Sport Academy' },
+{ name: '122', coords: [44.6471, 10.9252], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-4-Ville.pdf', tooltip: 'Sci Club 4 Ville' },
+{ name: '123', coords: [46.6090, 11.9330], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Alta-Badia-Nordic.pdf', tooltip: 'Sci Club Alta Badia Nordic' },
+{ name: '124', coords: [46.0220, 10.7840], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Bolbeno.pdf', tooltip: 'Sci Club Bolbeno' },
+{ name: '125', coords: [45.8890, 11.0390], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Citta-di-Rovereto.pdf', tooltip: 'Sci Club Citta di Rovereto' },
+{ name: '126', coords: [46.0610, 11.3380], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Panarotta.pdf', tooltip: 'Sci Club Panarotta' },
+{ name: '127', coords: [46.3910, 10.8110], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Sci-Club-Rabbi.pdf', tooltip: 'Sci Club Rabbi' },
+{ name: '128', coords: [45.8575, 10.6200], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Tremalzo-Tremalzo-Bike.pdf', tooltip: 'Sci Club Tremalzo Tremalzo Bike' },
+{ name: '129', coords: [46.9400, 11.9800], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Sci-Klausberg.pdf', tooltip: 'Scuola Sci Klausberg' },
+{ name: '130', coords: [46.1440, 10.3370], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Scuola-Sci-Kristal.pdf', tooltip: 'Scuola Sci Kristal' },
+{ name: '131', coords: [46.8960, 11.2360], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Scuola-Sci-Racines.pdf', tooltip: 'Scuola Sci Racines' },
+{ name: '132', coords: [46.8130, 11.8660], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Pfalzen.pdf', tooltip: 'Sci Club Pfalzen' },
+{ name: '133', coords: [46.9150, 11.9320], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Sci-Club-Weissenbach.pdf', tooltip: 'Sci Club Weissenbach' },
+{ name: '134', coords: [46.4769, 11.7579], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Ski-Team-Fassa.pdf', tooltip: 'Ski Team Fassa' },
+{ name: '135', coords: [46.8650, 11.9540], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Skiclub-Taufers.pdf', tooltip: 'Skiclub Taufers' },
+{ name: '136', coords: [46.8260, 12.1400], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Skischule-Gsies-SVV-Pichl-Gsies.pdf', tooltip: 'Skischule Gsies SVV Pichl Gsies' },
+{ name: '137', coords: [46.8490, 11.1400], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Skischule-Pfelders.pdf', tooltip: 'Skischule Pfelders' },
+{ name: '138', coords: [46.5340, 11.4490], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Skischule-Ritten.pdf', tooltip: 'Skischule Ritten' },
+{ name: '139', coords: [46.1650, 11.0410], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Soccorso-Piste-Paganella.pdf', tooltip: 'Soccorso Piste Paganella' },
+{ name: '140', coords: [46.4983, 11.3548], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/08/Technoalpin.pdf', tooltip: 'Technoalpin' },
+{ name: '141', coords: [46.4983, 11.3548], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/01/Volksbank-Ski-Team.pdf', tooltip: 'Volksbank Ski Team' },
+{ name: '142', coords: [-33.3559, -70.2913], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Club-de-Ski-La-Parva-Master-La-Parva.pdf', tooltip: 'Club de Ski La Parva Master La Parva' },
+{ name: '143', coords: [-36.6067, -72.1030], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/06/Club-Esqui-de-Chillan.pdf', tooltip: 'Club Esqui de Chillan' },
+{ name: '144', coords: [-38.7359, -72.5904], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Club-Ski-Araucarias.pdf', tooltip: 'Club Ski Araucarias' },
+{ name: '145', coords: [39.7420, -104.9915], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Scuola-Sci-Colorado.pdf', tooltip: 'Scuola Sci Colorado' },
+{ name: '146', coords: [36.9319, 138.8080], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Naeba-Ski-School.pdf', tooltip: 'Naeba Ski School' },
+{ name: '147', coords: [35.6895, 139.6917], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Tokyo-Dental-College-Tokyo-Womens-Medical-University.pdf', tooltip: 'Tokyo Dental College Tokyo Womens Medical University' },
+{ name: '148', coords: [45.9221, 9.3170], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Crystal-Race-Team.pdf', tooltip: 'Crystal Race Team' },
+{ name: '149', coords: [40.1950, 29.0600], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Team-Cardanadam.pdf', tooltip: 'Ski Team Cardanadam' },
+{ name: '150', coords: [39.9334, 32.8597], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Snowflake-Ski-Team.pdf', tooltip: 'Snowflake Ski Team' },
+{ name: '151', coords: [38.5884, -90.6629], url: 'https://www.pietrovitalini.com/wp-content/uploads/2024/02/Hidden-Valley-Race-Club.pdf', tooltip: 'Hidden Valley Race Club' },
+{ name: '152', coords: [51.669636, 5.645109], url: 'https://nl.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Snowboardclub-De-Schans-1.pdf', tooltip: 'Ski & Snowboardclub De Schans' },
+{ name: '153', coords: [51.816500, 4.748730], url: 'https://nl.pietrovitalini.com/wp-content/uploads/2024/02/Ski-School-Drechtsteden-1.pdf', tooltip: 'Ski School Drechtsteden' },
+{ name: '154', coords: [51.768448, 4.631001], url: 'https://nl.pietrovitalini.com/wp-content/uploads/2024/02/IPCO-1.pdf', tooltip: 'IPCO' },
+{ name: '155', coords: [51.2199, 4.4150], url: 'https://nl.pietrovitalini.com/wp-content/uploads/2024/02/Vision-Race-Project-1.pdf', tooltip: 'Vision Race Project' },
+{ name: '156', coords: [47.1512283, 9.8035934], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_464762da5d8d4b10b35d7848768e9870.pdf', tooltip: 'Jan Klocker Bürs' },
+{ name: '157', coords: [47.2659118, 9.7029357], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_cce2e80f66894e5aa9ba7803c4a71a5d.pdf', tooltip: 'SV Laterns' },
+{ name: '158', coords: [47.2000000, 10.1500000], url: 'https://www.vitaliniaustria.com/_files/ugd/ce6eb1_c66f06c43fe9461eb8402bc251644a3a.pdf', tooltip: 'Skilifte Lech' },
+{ name: '159', coords: [47.0957061, 9.8644414], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4653497bd3084a55be6fbce008626890.pdf', tooltip: 'WSV Vandans' },
+{ name: '160', coords: [47.0000000, 9.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_805583bbe78b41299802974f20e08f70.pdf', tooltip: 'Ski Club Hirschberg Langen' },
+{ name: '161', coords: [46.5833000, 14.9000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9e9d15b83d234bfaa086279de31b4ee9.pdf', tooltip: 'SC Petzen' },
+{ name: '162', coords: [46.7982211, 13.4963308], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_bb5518e259cb42d798d0ac4a7d5d0e0b.pdf', tooltip: 'SG Spital/Drau' },
+{ name: '163', coords: [46.6336371, 13.8872722], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_81c7182a05f34dddb724d1cc41bd91c2.pdf', tooltip: 'SK Landskron' },
+{ name: '164', coords: [46.8016902, 13.4511819], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_83de2311cc1941ccbcf344ecdea9fd3f.pdf', tooltip: 'Schiclub Baldramsdorf' },
+{ name: '165', coords: [47.2861513, 16.2124214], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4fc4dcb41a61475fb528b39b8389cf15.pdf', tooltip: 'Union Schiclub Oberwart USCO' },
+{ name: '166', coords: [47.5040221, 13.4486405], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_462f5eb2cff047df8fbe03ffb25db7f6.pdf', tooltip: 'SK Annaberg' },
+{ name: '167', coords: [47.1145001, 13.1352414], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_18a41f5d4aef4c37a0d62a862ddc7d90.pdf', tooltip: 'Ski Club Gastein' },
+{ name: '168', coords: [47.5866984, 12.6934197], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_967d3e4302034189a2f6f6fb2bf4dc67.pdf', tooltip: 'Bergbahnen Lofer' },
+{ name: '169', coords: [48.2219343, 16.3936072], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_fbc8f0ed7086451491461f10c0b2ba3b.pdf', tooltip: 'Falkensteiner' },
+{ name: '170', coords: [47.3239636, 12.7963165], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_51b77853f81b416990a9bcd03f9c54a6.pdf', tooltip: 'SBSSV' },
+{ name: '171', coords: [47.3336293, 13.3031532], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_31e69f48f7dd4b24843b90dea9878f88.pdf', tooltip: 'SC Wagrain' },
+{ name: '172', coords: [47.3336293, 13.3031532], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9ba83d7e653f42e9a07a37332590997b.pdf', tooltip: 'Ski Schule Rot Weiss Rot' },
+{ name: '173', coords: [47.7086178, 13.1973833], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b93aba6ca97a4b0cb89cc16076c6f595.pdf', tooltip: 'USV Krispl-Gaissau' },
+{ name: '174', coords: [47.2780439, 13.3193714], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_49b2be4b1f7d4d60b0a6efd792efceb3.pdf', tooltip: 'SC Raiba Kleinarl' },
+{ name: '175', coords: [47.2516070, 12.2762162], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_dd30f0d6ebad4595a6faf25a11388b29.pdf', tooltip: 'USC Neukirchen' },
+{ name: '176', coords: [47.2844490, 12.5724184], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_81c94dc76fbb4ca9bd2c34a0616fa2d5.pdf', tooltip: 'SC Uttendorf' },
+{ name: '177', coords: [47.4266166, 12.8481048], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9852d0942fdb4260acfbbeaaf8e309bd.pdf', tooltip: 'Schiclub Saalfelden' },
+{ name: '178', coords: [47.2816190, 12.6481690], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_37f3a204f7a64600a592974db8f47bf5.pdf', tooltip: 'Skiclub Niedernsill' },
+{ name: '179', coords: [47.2713898, 12.7573679], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7d4de3b69a4f4173a7bd315a6b7ce610.pdf', tooltip: 'Schischule Kaprun' },
+{ name: '180', coords: [47.3846705, 13.4627822], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_8c184f282d0743b985cd598673d48f5a.pdf', tooltip: 'Skiclub Radstadt' },
+{ name: '181', coords: [47.4053277, 12.9027126], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9661c724e79548f2b5f2e53f6ce7d1da.pdf', tooltip: 'Ski Club Maria Alm' },
+{ name: '182', coords: [47.4386347, 12.7598880], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_01b463d50a274f84a525ae2e65bd315b.pdf', tooltip: 'Skiclub Leogang' },
+{ name: '183', coords: [47.0802760, 13.6890482], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2849fcf836e04ec7a8f98d3b5be2d0a0.pdf', tooltip: 'Skischule Firn Sepp' },
+{ name: '184', coords: [47.3761503, 13.1249445], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_0f6272fbe9aa433f951eba1a88c1dd4f.pdf', tooltip: 'Schischule Mühlbach' },
+{ name: '185', coords: [47.7250227, 13.4285484], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e199f11c9d954c1aba4f04708ea24a7d.pdf', tooltip: 'USC Abersee' },
+{ name: '186', coords: [47.2494362, 13.5569603], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_51ff465712b2494f9b607b1b93c3dc13.pdf', tooltip: 'Skischule Top Obertauern' },
+{ name: '187', coords: [47.4168029, 13.2170933], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_8b2237bd7a824da8ba7d2b56a9a0c7b6.pdf', tooltip: 'SC Bischofshofen' },
+{ name: '188', coords: [47.8942481, 13.1260778], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7780d1adbf014f59913618c9bdc9d9b0.pdf', tooltip: 'Skiclub Seekirchen' },
+{ name: '189', coords: [47.3662876, 12.7357884], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_fcc714cb8eff4818b21b1f836c73ba67.pdf', tooltip: 'Skiclub Viehhofen' },
+{ name: '190', coords: [47.2866946, 12.8241307], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9a443bcffb90469f83e71def1bdea11c.pdf', tooltip: 'Skiclub Bruck' },
+{ name: '191', coords: [47.2516070, 12.2762162], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f486448c213544e1a60e1a2b87dbaadf.pdf', tooltip: 'Ski Schule Alpen Sports' },
+{ name: '192', coords: [47.8078354, 13.1554315], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b3ea5168887c45e1a2bb73fd98f5f768.pdf', tooltip: 'USC Koppl' },
+{ name: '193', coords: [47.3818943, 13.0022576], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_842b71e059d44e8f9e703383db17bf42.pdf', tooltip: 'Skischule Dienten' },
+{ name: '194', coords: [47.8671332, 13.1231841], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c5e146793ba84d2ba1d9b8679513762a.pdf', tooltip: 'Eugendorf' },
+{ name: '195', coords: [47.8529968, 13.9571241], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2b7bf4643d8b4fd6861bb5035bb5f086.pdf', tooltip: 'Grünau Kasberg' },
+{ name: '196', coords: [47.9568047, 13.1978045], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_98355bfa72d74554a906eb68c79d0a5e.pdf', tooltip: 'Schiclub Kostendorf' },
+{ name: '197', coords: [47.2374042, 13.2013974], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c28f20cedb564e329170e150d6abc267.pdf', tooltip: 'Bergbahnen Großarl' },
+{ name: '198', coords: [47.1634145, 13.6766796], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_d4b200c714ca45ebbddad22beca0035e.pdf', tooltip: 'Skischule Funny am Fanningberg' },
+{ name: '199', coords: [47.2286279, 12.9941152], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_fa24bd0a585a44b0b959508003870889.pdf', tooltip: 'Skischool Adventure Rauris' },
+{ name: '200', coords: [47.9609716, 14.7747171], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_77b5d9db2d9e45b7ba84719ed6402e47.pdf', tooltip: 'Waidhofen' },
+{ name: '201', coords: [48.0522598, 15.1347796], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7bce7cb33ebc492387a857706bd3dd6a.pdf', tooltip: 'Union Purgstall' },
+{ name: '202', coords: [48.1298877, 15.1376585], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_6e24fc9479bd4c819a6fddad51f65d0b.pdf', tooltip: 'Wieselburg' },
+{ name: '203', coords: [48.1091092, 14.8464294], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_76cd93077ae94dceb3637dc30a71ae9f.pdf', tooltip: 'SC Greinsfurth' },
+{ name: '204', coords: [47.6545995, 15.8716054], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c01d2920f7d041efb4865e8a547037c9.pdf', tooltip: 'SC Schottwien' },
+{ name: '205', coords: [48.0074626, 14.5463264], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_429cc1e212b648e7bc59929175433ad5.pdf', tooltip: 'SV Kurnberg' },
+{ name: '206', coords: [47.9479529, 14.8952028], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_67ec69deaa144169a89adc9cb30b9d61.pdf', tooltip: 'Ybbsitz' },
+{ name: '207', coords: [47.5385813, 15.9817793], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_6bfa1a3c2e764ca1b1f71407f816b2f3.pdf', tooltip: 'USC Mariensee' },
+{ name: '208', coords: [48.2043985, 15.6229118], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2195a2cfb57a43f0b4c0cef63e3d1806.pdf', tooltip: 'LSV NÖ' },
+{ name: '209', coords: [48.2043985, 15.6229118], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_934a5ae20fb44402a39172ad32619b7e.pdf', tooltip: 'Schiclub Voith' },
+{ name: '210', coords: [48.1050511, 15.6058057], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_5c7bb6f9f5f94b6c827a6d49b79f8ea9.pdf', tooltip: 'NF Wilhelmsburg' },
+{ name: '211', coords: [48.1298877, 15.1376585], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_af15508329fa4e269915da12e11d7e58.pdf', tooltip: 'WSV Lunz am See' },
+{ name: '212', coords: [48.3311702, 16.0517900], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_1c48c0336e824669b7e47edc6330bce9.pdf', tooltip: 'Schi Tullnerfeld' },
+{ name: '213', coords: [48.2733549, 14.9483090], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c1f36738e7b94c6caf7bec1fdb09b80f.pdf', tooltip: 'Strudengau' },
+{ name: '214', coords: [48.6155979, 14.8118617], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2e2e2b1a0cdf4419a26bdafb53e4d876.pdf', tooltip: 'SC Nordwald' },
+{ name: '215', coords: [48.3311702, 16.0517900], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_98c4cfdf0fc046d5970d525ef78665a2.pdf', tooltip: 'Schischule Haginger' },
+{ name: '216', coords: [46.8711000, 11.0270000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_dcd0fe3cfe90489da0648cc442f6a525.pdf', tooltip: 'Gurgl' },
+{ name: '217', coords: [47.5000000, 10.7000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_a0bd7234524747a39866bb247bb75561.pdf', tooltip: 'SC Ehenbichl' },
+{ name: '218', coords: [47.6000000, 12.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_0c26b28892654a429c846ea678a3b3bf.pdf', tooltip: 'SC Erl' },
+{ name: '219', coords: [47.4880000, 10.6360000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_90336549dc7a454e85771b22f38593d5.pdf', tooltip: 'Racing Team Lechaschau' },
+{ name: '220', coords: [47.3915000, 11.9494000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_6bd2b3749fde459a920f8dc4ce2af7d3.pdf', tooltip: 'SC Alpbach' },
+{ name: '221', coords: [46.8699000, 11.0266000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_0dcddc5dbd254e0a9acc3ed8231cae6d.pdf', tooltip: 'Schischule Obergurgl' },
+{ name: '222', coords: [46.7153000, 12.9907000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f66c24672dce4c57aa9c3994b4345054.pdf', tooltip: 'SK Brixen' },
+{ name: '223', coords: [47.5038000, 12.2897000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_33237b9ac0874910807f8849484476f1.pdf', tooltip: 'Schischule Horn' },
+{ name: '224', coords: [47.2930000, 11.2580000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_650836f03d4443769c0910fd9392d3b5.pdf', tooltip: 'SV Oberperfuß' },
+{ name: '225', coords: [47.3097000, 11.0950000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_92ad85aac64747b897aa99d5bc64508a.pdf', tooltip: 'SK Telfs' },
+{ name: '226', coords: [47.5803000, 12.1019000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_3597b87d11b44c8a81f8f350d935845a.pdf', tooltip: 'SK Thiersee' },
+{ name: '227', coords: [46.9698000, 11.0107000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_5056cb35d78649339cbc9484b6685073.pdf', tooltip: 'Sölden Team' },
+{ name: '228', coords: [47.2978000, 11.3963000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2db40a2670a6413da02064bbba21c6a7.pdf', tooltip: 'Skischule Skiart Leipold' },
+{ name: '229', coords: [47.2736000, 11.2336000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2c90c5fc7e5744528447af7548b8b2c5.pdf', tooltip: 'SKITRI Zirl' },
+{ name: '230', coords: [47.2206000, 11.4633000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b85c529af0dd4839810c88244ed7547b.pdf', tooltip: 'Sportverein Lans' },
+{ name: '231', coords: [47.7128000, 13.6205000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b664bf7d4bc34eeaac56c7d9315e5b7b.pdf', tooltip: 'Ski Team Bad Ischl' },
+{ name: '232', coords: [47.2286000, 11.4489000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_50730e47d3cc4307a9fdb2886992f07b.pdf', tooltip: 'SV Sistrans' },
+{ name: '233', coords: [47.5200000, 12.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_488dd9932fcf44e4a75599dbca2ccca6.pdf', tooltip: 'ST Johann in Tirol' },
+{ name: '234', coords: [47.4833000, 10.7167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_5c23eb77d8ce4ea7ac4c0a09806bba7b.pdf', tooltip: 'Skiclub Breitenwang' },
+{ name: '235', coords: [46.9700000, 11.0100000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_24b918d27d874d9bbc20032870030151.pdf', tooltip: 'Sölden' },
+{ name: '236', coords: [47.6337000, 12.3335000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f62496e075e14d6492a284c1387c965a.pdf', tooltip: 'WSV Walchsee' },
+{ name: '237', coords: [47.2867000, 11.8607000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_06ebbc4ad1ad40c4a66762113ee40eef.pdf', tooltip: 'Ski Alpin Uderns' },
+{ name: '238', coords: [47.1935000, 11.5176000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e49ded5f36814d60a2efe55e32adbf94.pdf', tooltip: 'SV Navis' },
+{ name: '239', coords: [47.2689000, 11.3928000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_730194502f304f7f9916df827897f24f.pdf', tooltip: 'WSV Innsbruck' },
+{ name: '240', coords: [47.2996000, 11.3032000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f7bb35de07454574b79f33510e071501.pdf', tooltip: 'WSV Reith' },
+{ name: '241', coords: [47.4436000, 10.6352000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f750c6bbf8ce4a77b68efb66bb6e48fd.pdf', tooltip: 'WSV Höfen' },
+{ name: '242', coords: [46.9730000, 10.2897000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7d516b27552840d495fac30656d6cafd.pdf', tooltip: 'Skiclub Ischgl' },
+{ name: '243', coords: [47.0936000, 11.4125000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4c879f182e2742f38627c8e24a33c915.pdf', tooltip: 'SC Raiba Trins' },
+{ name: '244', coords: [47.3962000, 10.9230000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2f217c174eda43d69d11473a47335d15.pdf', tooltip: 'Skiclub Ehrwald 1907' },
+{ name: '245', coords: [47.0936000, 11.4125000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_a49fe86a357c49f196099d233dd99dbe.pdf', tooltip: 'Schilift Trins' },
+{ name: '246', coords: [47.2000000, 11.3333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_26b8a5aca9684269992decc7c9d105fe.pdf', tooltip: 'Naters-Mutters' },
+{ name: '247', coords: [47.5833000, 12.1667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7352e1825ae9485d81eda6a713ce9ab1.pdf', tooltip: 'Kufsteiner Schiläufer Vereinigung' },
+{ name: '248', coords: [47.5000000, 14.1333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7e7b4ace8255430d87b1ac45a0eb308a.pdf', tooltip: 'Aigen im Ennstal' },
+{ name: '249', coords: [47.6333000, 13.8333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_1f30f9bca5b74c65877304417bb1bb21.pdf', tooltip: 'ASVÖ Grundlsee' },
+{ name: '250', coords: [46.8000000, 15.3333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_079c4ca8a08a4e71b562216ac66eccde.pdf', tooltip: 'St. Stefan ob Stainz' },
+{ name: '251', coords: [47.6333000, 13.7833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_37640bc4604a4b75974fb07fcc833e7b.pdf', tooltip: 'WSV Altaussee' },
+{ name: '252', coords: [47.4000000, 15.9333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_a0516bf589d14a2c8f4c584b1ad0282f.pdf', tooltip: 'SC Friedberg Pinggau' },
+{ name: '253', coords: [47.4667000, 15.4833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_809fda6765054bdcab2bf1a57b4d4824.pdf', tooltip: 'WSV Au bei Turnau' },
+{ name: '254', coords: [47.4333000, 15.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_414b043481f44968b91e7545a4ae167c.pdf', tooltip: 'USV Mönichwald' },
+{ name: '255', coords: [47.5000000, 15.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_babbe018fa8348d5bdb1c20ff82a17e0.pdf', tooltip: 'St Barbara im Mürztal' },
+{ name: '256', coords: [47.1333000, 14.4833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_bdc76f8a0ed641048b64119f8573c2fc.pdf', tooltip: 'SC Weißkirchen' },
+{ name: '257', coords: [47.1333000, 15.4333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_af07987d949a4ca8852f2b2bd98ee8ea.pdf', tooltip: 'SC Stattegg' },
+{ name: '258', coords: [47.1000000, 14.1000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_28744a86f6a24e54973f8803a8d7bd9d.pdf', tooltip: 'Predlitz/Turracherhöhe' },
+{ name: '259', coords: [47.0667000, 15.5500000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_cde213e59f6943d1a3f5c6be335d3b82.pdf', tooltip: 'ESV Wagendorf' },
+{ name: '260', coords: [47.7833000, 15.4167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_62ff790859b548098151b40732bd3bc3.pdf', tooltip: 'St. Sebastian' },
+{ name: '261', coords: [47.5162000, 14.5501000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_3bd7382c813e4ad58e7f3c09d9eea428.pdf', tooltip: 'Inklusionsteam Joglland' },
+{ name: '262', coords: [47.6000000, 13.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_28f4c72435574b5eacb7f3369bba64aa.pdf', tooltip: 'Schischule Tauplitz' },
+{ name: '263', coords: [47.4500000, 15.8667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_994a1bf6067343ad86dc1f6eb7727634.pdf', tooltip: 'USV St. Jakob im Walde' },
+{ name: '264', coords: [47.2500000, 14.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4862f5e5027546f0995eaf19912698c9.pdf', tooltip: 'SC Gaal' },
+{ name: '265', coords: [47.4333000, 15.7333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c17d241dc7ed4710a77f89c06e3eeaa2.pdf', tooltip: 'SG Knauf Weißenbach' },
+{ name: '266', coords: [47.4333000, 15.8000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f4563118ed5449de911f687a7a5725a8.pdf', tooltip: 'Mönichwald Skischool' },
+{ name: '267', coords: [47.1000000, 14.8333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_ae40837ec7c04e4fb3639a94fbe8d6da.pdf', tooltip: 'USV Krakauebene' },
+{ name: '268', coords: [47.5162000, 14.5501000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_0b9f67c9a492428bb494cb99bdc5332a.pdf', tooltip: 'SK Admont/Hall' },
+{ name: '269', coords: [47.3833000, 13.6833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f16f2f9d73f144fba4921eeb0c954457.pdf', tooltip: 'SC Gröbming' },
+{ name: '270', coords: [47.0667000, 15.4833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_bd213e9b0e694234818b2081602708e0.pdf', tooltip: 'SV St. Radegund' },
+{ name: '271', coords: [47.5833000, 15.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c92706d649944125aa4c8b7d3ba079b0.pdf', tooltip: 'Wintersportclub Aflenz' },
+{ name: '272', coords: [47.0667000, 15.0961000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_125bf279e0634988b4b20c899349a0ea.pdf', tooltip: 'Sportunion Köflach' },
+{ name: '273', coords: [47.3000000, 15.6667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e20a565a818d49e2a2d70074dd217b37.pdf', tooltip: 'Union Skiverein Birkfeld' },
+{ name: '274', coords: [47.5162000, 14.5501000], url: 'https://9b573b04-1471-466e-8cc5-a937cde977b3.filesusr.com/ugd/cda97c_a172829d0ab84f6986c350a1a00d87c0.cdr', tooltip: 'NF Grossraming' },
+{ name: '275', coords: [47.5162000, 14.5501000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_eba82bc3158a4dd59896e3a454389538.pdf', tooltip: 'Schischule Kunterbunt' },
+{ name: '276', coords: [47.5667000, 13.9667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_8b92be43c3db462eb4667858de992b4a.pdf', tooltip: 'Schiteam Union Julbach' },
+{ name: '277', coords: [47.9167000, 13.8333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c3dda2ce0eab429880dde2809c9328fd.pdf', tooltip: 'SCU Eberstalzell' },
+{ name: '278', coords: [48.0500000, 14.6667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_1e4f3863195e4ddabba53c12132ff907.pdf', tooltip: 'SC Tragwein' },
+{ name: '279', coords: [47.8667000, 14.5333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_88db22890c4e4b7498ac800a09de7511.pdf', tooltip: 'Reichraming' },
+{ name: '280', coords: [47.8500000, 14.5833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_fb8b871c0e0a426982e665c238c68464.pdf', tooltip: 'ASVÖ Losenstein' },
+{ name: '281', coords: [47.5833000, 14.5000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7d2b749f49484122814b6cc653f2ad47.pdf', tooltip: 'SC Dachstein Oberbank' },
+{ name: '282', coords: [47.9167000, 14.3333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_df6556d1f5b74181a9dad56d9b23a21e.pdf', tooltip: 'Schischule Molln' },
+{ name: '283', coords: [47.8333000, 13.6667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4d0dcff9b29943e09bb76f34f316fa74.pdf', tooltip: 'Reindlmühl' },
+{ name: '284', coords: [48.0500000, 14.1833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_d857abebeba047bab7932dbcf154ba2b.pdf', tooltip: 'SSU Hansberg' },
+{ name: '285', coords: [48.2167000, 13.6000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_4b6ba4b864fe4730af47f8758890cd4a.pdf', tooltip: 'SC Union Hohenzell' },
+{ name: '286', coords: [47.6333000, 13.6500000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_cc8cfbaa88a14388946ccab47ee7ca86.pdf', tooltip: 'West Bad Goisern' },
+{ name: '287', coords: [47.5162000, 14.5501000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_cbaf913ebfb449819ae4ceca1bb0a060.pdf', tooltip: 'Fröhlich Sport GmbH' },
+{ name: '288', coords: [48.5895000, 14.1866000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_9130d5a8b5c7471da2787be9463f9cdd.pdf', tooltip: 'Schiunion Böhmerwald' },
+{ name: '289', coords: [48.5167000, 14.2833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c1b725cd6dcb4000b00231d1e2942756.pdf', tooltip: 'Sportunion Bad Leonfelden' },
+{ name: '290', coords: [47.8000000, 14.1667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_245b5c0ecaa54542a7f493c516ab1852.pdf', tooltip: 'Ski Club Haid' },
+{ name: '291', coords: [47.5833000, 13.5167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_19d6d8b47e1b4274be23169396bee3ad.pdf', tooltip: 'Schischule Gosau' },
+{ name: '292', coords: [47.9167000, 14.1333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2f3160de935d4e7384aee98a67ddc224.pdf', tooltip: 'SC Steinerkirchen' },
+{ name: '293', coords: [47.9000000, 14.1000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2bfdfd7ab3064b439c5b3378febaaee0.pdf', tooltip: 'Schiverein Traunkirchen' },
+{ name: '294', coords: [47.8667000, 14.1167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e7e4c3b55cc34120a16db8743cc445b1.pdf', tooltip: 'SV Molln' },
+{ name: '295', coords: [47.6333000, 14.9333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_633d97a8f8dc4b1da443abccdc15b9bb.pdf', tooltip: 'Schischule Liebenau' },
+{ name: '296', coords: [47.5833000, 13.6000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_d88fd763be4e4c0c9a1d669de96f11e1.pdf', tooltip: 'ASKÖ Gosau' },
+{ name: '297', coords: [48.5167000, 14.5167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_322f8df117c242dc9c3e5139d1e9656f.pdf', tooltip: 'Sternstein Lifte' },
+{ name: '298', coords: [48.5833000, 14.1167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_dd826523093e4083891b40b5ea691e37.pdf', tooltip: 'Gastroszene Böhmerwald' },
+{ name: '299', coords: [48.1833000, 14.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b0e367947e9a4dd5a89544908c3a1dc5.pdf', tooltip: 'SC Taufkirchen' },
+{ name: '300', coords: [48.0500000, 13.6667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_0a76357c7cd14d55a80b80051c5f9d33.pdf', tooltip: 'ASVÖ SC Ampflwang' },
+{ name: '301', coords: [48.2000000, 14.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_8616b36eb01d46cb85af757037e34c42.pdf', tooltip: 'WKO' },
+{ name: '302', coords: [47.7000000, 14.1500000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_5c72df76393e47d287b8bb7d94f8b2ec.pdf', tooltip: 'Skischule Hinterstoder' },
+{ name: '303', coords: [48.5000000, 13.7333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_127f4b4eb5c24b3caf1eda24b0d07944.pdf', tooltip: 'SC Engelhartszell' },
+{ name: '304', coords: [48.0833000, 14.2667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_ce4dda3fe1484eb89053dd2ae75ee592.pdf', tooltip: 'USC NF Neuhofen' },
+{ name: '305', coords: [47.9000000, 13.1333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e5125c3ded3743029c747467f99ab892.pdf', tooltip: 'Lochen' },
+{ name: '306', coords: [48.3833000, 14.6000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7dcbefe8772c4495b770fa1b0d90135c.pdf', tooltip: 'SV Sandl' },
+{ name: '307', coords: [47.8833000, 13.9667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_267b16f7d8214651bab75dc5cbeb1c36.pdf', tooltip: 'SU Pettenbach' },
+{ name: '308', coords: [48.1667000, 14.0333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_403084e2b8204541ae0f376967e84009.pdf', tooltip: 'Ski Union Haibach' },
+{ name: '309', coords: [48.1667000, 14.0333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7310330d1fd443fba0b0a039878b8778.pdf', tooltip: 'TVN Wels' },
+{ name: '310', coords: [47.9333000, 16.0000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_49a179f91b8e4d80b638a11925c079c0.pdf', tooltip: 'WSV Trattenbach' },
+{ name: '311', coords: [48.2667000, 14.7833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_78902c8a209849e79c9d65dc5fc05545.pdf', tooltip: 'Union Waldhausen' },
+{ name: '312', coords: [48.0000000, 14.0000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_ce00985258c9452b9b039668a0ce4797.pdf', tooltip: 'LSV Oberösterreich' },
+{ name: '313', coords: [47.9000000, 14.1500000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e857cb015cdd49128acb07c00729cd19.pdf', tooltip: 'WSV Windischgarsten' },
+{ name: '314', coords: [48.0167000, 14.0333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2f77d7406416454a86f3d9ca32dc65ff.pdf', tooltip: 'SC Ottnang' },
+{ name: '315', coords: [48.0833000, 14.1667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2790053dd7854dc2ac7e2839f1c0f352.pdf', tooltip: 'Schiverein Allhaming' },
+{ name: '316', coords: [48.2000000, 14.0167000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_ac5f0283e4c5462b88438b9ecdbeae29.pdf', tooltip: 'NF Marchtrenk' },
+{ name: '317', coords: [47.5162000, 14.5501000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_d05b634478904434861b6f89120c15fc.pdf', tooltip: 'Schorschi' },
+{ name: '318', coords: [47.8000000, 13.7500000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_8548f10241554f21a2fdfdb4a1b150b1.pdf', tooltip: 'Skiclub Ebensee' },
+{ name: '319', coords: [48.3000000, 11.8667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_dbd9a57f881d4bd0a3f1777ff946e33a.pdf', tooltip: 'SC Buch am Buchrain' },
+{ name: '320', coords: [47.7167000, 12.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_17c0a5c7c7bd4135a192b0af646231d6.pdf', tooltip: 'TSV Reischach' },
+{ name: '321', coords: [48.0000000, 12.6667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c10fa7cd3bb441d2b2b8476c84cf9365.pdf', tooltip: 'DJK Grattersdorf' },
+{ name: '322', coords: [47.7258000, 12.9333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b0f4a580367c4a9fa1be75d4363a6d2d.pdf', tooltip: 'Ski Club Piding' },
+{ name: '323', coords: [47.9500000, 8.5000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_95fde917bca440498fa0ecd2d6feac12.pdf', tooltip: 'SC 1900 Donaueschingen' },
+{ name: '324', coords: [48.4833000, 9.2000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_2fa4e6bdfc064c0da3e8d6ad745003d5.pdf', tooltip: 'TSG Reutlingen' },
+{ name: '325', coords: [50.9384000, 6.9603000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_7990f9b2d26949728257967fd748c848.pdf', tooltip: 'Skiclub Alpenrose Köln' },
+{ name: '326', coords: [51.2667000, 7.1833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_ce34193019ea444d8c822803bea5df62.pdf', tooltip: 'DAV Wuppertal' },
+{ name: '327', coords: [47.6667000, 9.5000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_27b065dbac8e43bb98c479990821be22.pdf', tooltip: 'SC Ailingen' },
+{ name: '328', coords: [48.8333000, 10.3667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_83b6aa71c5894f3c83f638dfcdf75ea5.pdf', tooltip: 'Ski Club Kapfenburg' },
+{ name: '329', coords: [48.8000000, 11.5833000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_679e45ae59eb421c95bbaf5ce5a0ea28.pdf', tooltip: 'TSV Kösching' },
+{ name: '330', coords: [48.0500000, 11.6000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_352e6597fd80417f8df70c48ac433451.pdf', tooltip: 'TSV Oberhaching' },
+{ name: '331', coords: [49.7333000, 8.8333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_070d979629234829a7df612337d4e333.pdf', tooltip: 'SC Weidenbach' },
+{ name: '332', coords: [48.2667000, 12.4000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_dea5a721be7a40e09e6eb28eb7550af1.pdf', tooltip: 'TSV Ampfing' },
+{ name: '333', coords: [49.4783000, 8.4477000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_c54bd537a9b74454801b89d4dc70e539.pdf', tooltip: 'Ski Club Ludwigshafen' },
+{ name: '334', coords: [48.8000000, 11.5000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_66f479d19f1547efadae54ba7a8cebfd.pdf', tooltip: 'Ski Club Irnsing' },
+{ name: '335', coords: [48.1351000, 11.5820000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_e37cb0e606a447bbbbb1c6821f962041.pdf', tooltip: 'RPC Munich' },
+{ name: '336', coords: [49.0000000, 10.3667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b6955c43c240454987227529a252bb2a.pdf', tooltip: 'SC Langfurth' },
+{ name: '337', coords: [47.5162000, 11.2665000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_f0f8ea97cd6c4080a34c1622f55b0963.pdf', tooltip: 'Ski Club Krün' },
+{ name: '338', coords: [47.4412000, 11.1836000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_03fe268383554343818b1b17952bd755.pdf', tooltip: 'Ski Club Mittenwald' },
+{ name: '339', coords: [49.7000000, 10.8333000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_30edc20f6fa54c3c83c9c2ab944a4244.pdf', tooltip: 'Skiclub Hemhofen' },
+{ name: '340', coords: [48.6000000, 12.8667000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b90b16c9d96b4a2aac7c4a836b3d3c0e.pdf', tooltip: 'SC Wallersdorf' },
+{ name: '341', coords: [48.9000000, 13.6000000], url: 'https://www.vitaliniaustria.com/_files/ugd/cda97c_b6f5ae846da847388bcb4af532b482a3.pdf', tooltip: 'WSV Mitterfirmiansreut' },
+{ name: '342', coords: [45.76437, 3.08372], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/CUC-Clermont.pdf', tooltip: 'CUC Clermont' },
+{ name: '343', coords: [45.57290, 6.77890], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Arcs-ans-Gliss.pdf', tooltip: 'Arcs ans Gliss' },
+{ name: '344', coords: [48.58000, 7.75300], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/ASES-Ski-Montagne.pdf', tooltip: 'ASES Ski Montagne' },
+{ name: '345', coords: [43.29510, -0.37070], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/ASM-Pau.pdf', tooltip: 'ASM Pau' },
+{ name: '346', coords: [42.89588, 0.06224], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Avalanche-Ski-Club-Bareges.pdf', tooltip: 'Avalanche Ski Club Barèges' },
+{ name: '347', coords: [45.83970, 6.36270], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Club-des-Sports-de-MANIGOD.pdf', tooltip: 'Club des Sports de Manigod' },
+{ name: '348', coords: [45.90000, 6.34500], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Club-des-Sports-des-Villards-sur-Thones.pdf', tooltip: 'Club des Sports des Villards sur Thônes' },
+{ name: '349', coords: [45.88390, 6.32500], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/College-Lycee-Saint-Joseph.pdf', tooltip: 'Collège-Lycée Saint-Joseph' },
+{ name: '350', coords: [45.43970, 4.38720], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Comite-de-ski-du-Forez.pdf', tooltip: 'Comité du Ski du Forez' },
+{ name: '351', coords: [46.33380, 6.05780], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Gex-Ski-Club.pdf', tooltip: 'Gex Ski Club' },
+{ name: '352', coords: [44.38510, 6.65470], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/GSSB-Sauze-Barcelonnette.pdf', tooltip: 'GSSB Sauze Barcelonnette' },
+{ name: '353', coords: [45.96500, 6.40890], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Le-Petit-Bornand.pdf', tooltip: 'Ski Club Petit-Bornand' },
+{ name: '354', coords: [43.60780, 1.08260], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Les-Amis-de-la-Montagne-Ski-Club-LIsle-Jourdain.pdf', tooltip: 'Les Amis de la Montagne & Ski Club L’Isle‑Jourdain' },
+{ name: '355', coords: [46.12740, 6.47870], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Lycee-Professionnel-CECAM.pdf', tooltip: 'Lycée Professionnel CECAM' },
+{ name: '356', coords: [45.85830, 6.61500], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Megeve-Pee-Wee.pdf', tooltip: 'Megève Pee Wee' },
+{ name: '357', coords: [45.33800, 5.26300], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/MJC-La-Cote-Saint-Andre.pdf', tooltip: 'MJC La Côte Saint-André' },
+{ name: '358', coords: [45.45100, 6.53800], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Orsatus-Ski-Racing.pdf', tooltip: 'Orsatus Ski Racing' },
+{ name: '359', coords: [43.29510, -0.37070], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Pyrenea-Sports.pdf', tooltip: 'Pyrénéa‑Sports' },
+{ name: '360', coords: [42.48330, 2.06670], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/SC-du-Cambre-dAze.pdf', tooltip: 'Ski Club Cambre d’Aze' },
+{ name: '361', coords: [44.18390, 7.15610], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Aventure-06.pdf', tooltip: 'Ski Aventure 06' },
+{ name: '362', coords: [43.52970, 5.44740], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-club-Aix-en-Provence.pdf', tooltip: 'Ski club Aix‑en‑Provence' },
+{ name: '363', coords: [48.07470, 6.87760], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Alpin-de-Gerardmer.pdf', tooltip: 'Club de Gérardmer Ski Alpin' },
+{ name: '364', coords: [43.06582, 0.15309], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Bagneres-La-Mongie.pdf', tooltip: 'Ski Club Bagnères La Mongie' },
+{ name: '365', coords: [45.36700, 7.04680], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-de-Bonneval-sur-Arc.pdf', tooltip: 'Ski Club de Bonneval sur Arc' },
+{ name: '366', coords: [42.49657, 2.04168], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-de-Font-Romeu.pdf', tooltip: 'Ski Club de Font‑Romeu' },
+{ name: '367', coords: [46.05490, 6.77920], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-de-Sixt-Fer-a-Cheval.pdf', tooltip: 'Ski Club de Sixt Fer à Cheval' },
+{ name: '368', coords: [45.16590, 6.43040], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-De-Valloire.pdf', tooltip: 'Ski Club De Valloire' },
+{ name: '369', coords: [43.11690, 1.60760], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-des-Vallees-dAriege.pdf', tooltip: 'Ski Club des Vallées d’Ariège' },
+{ name: '370', coords: [42.74560, -0.00340], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Gavarnie-Gedre.pdf', tooltip: 'Ski Club Gavarnie‑Gèdre' },
+{ name: '371', coords: [48.00360, 6.87570], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-La-Bresse.pdf', tooltip: 'Ski Club La Bresse' },
+{ name: '372', coords: [48.13620, 6.97340], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Le-Valtin.pdf', tooltip: 'Ski club Valtin' },
+{ name: '373', coords: [45.57230, 6.77890], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Les-Arcs.pdf', tooltip: 'Ski Club Les Arcs' },
+{ name: '374', coords: [42.79000, 0.59630], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Luchon.pdf', tooltip: 'Ski Club Luchon' },
+{ name: '375', coords: [44.02190, 1.35400], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Montalbanais.pdf', tooltip: 'Ski Club Montalbanais' },
+{ name: '376', coords: [45.92370, 6.86940], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Multiglisse.pdf', tooltip: 'Ski Club Multiglisse' },
+{ name: '377', coords: [44.69480, 6.32900], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Orcieres-Merlette.pdf', tooltip: 'Ski Club Orcières Merlette' },
+{ name: '378', coords: [42.54200, 1.84990], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Porte-Puymorens.pdf', tooltip: 'Ski Club Porté‑Puymorens' },
+{ name: '379', coords: [47.96340, 6.86980], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Ventron.pdf', tooltip: 'Ski Club Ventron' },
+{ name: '380', coords: [46.08790, 6.59500], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Alpin-Taninges-le-Praz-de-Lys.pdf', tooltip: 'Ski‑Club Alpin Taninges le Praz de Lys' },
+{ name: '381', coords: [45.51540, 2.74670], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Besse-Super-Besse.pdf', tooltip: 'Ski‑Club Besse Super‑Besse' },
+{ name: '382', coords: [48.49870, 7.22300], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Skieurs-de-Strasbourg.pdf', tooltip: 'Skieurs de Strasbourg' },
+{ name: '383', coords: [42.79290, 0.45490], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Station-de-Peyragudes.pdf', tooltip: 'Station de Peyragudes' },
+{ name: '384', coords: [45.29290, 6.88400], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Val-Cenis.pdf', tooltip: 'Club des Sports Val Cenis' },
+{ name: '385', coords: [45.29480, -0.93780], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Vertical-Ski.pdf', tooltip: 'Vertical Ski' },
+{ name: '386', coords: [46.00190, 6.69460], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Club-des-sports-Flaine.pdf', tooltip: 'Club des sports Flaine' },
+{ name: '387', coords: [41.56360, 2.00890], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-Terrassa.pdf', tooltip: 'Club Esqui Terrassa' },
+{ name: '388', coords: [46.38330, 5.93330], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Secours-Massif-Jurassien.pdf', tooltip: 'Secours Massif Jurassien' },
+{ name: '389', coords: [45.68100, 6.34600], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Silver-Ski-Team.pdf', tooltip: 'Silver Ski Team' },
+{ name: '390', coords: [45.88710, 6.79680], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Les-Houches.pdf', tooltip: 'Ski Club Les Houches' },
+{ name: '391', coords: [45.56410, 6.86540], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Ste-Foy-Tarentaise.pdf', tooltip: 'Ski Club Sainte‑Foy‑Tarentaise' },
+{ name: '392', coords: [45.87450, 5.94700], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Tefal.pdf', tooltip: 'Ski Club Tefal' },
+{ name: '393', coords: [42.79500, -0.06500], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Toy.pdf', tooltip: 'Ski Toy' },
+{ name: '394', coords: [45.20000, 6.72000], url: 'https://fr.pietrovitalini.com/wp-content/uploads/2024/02/Sports-Hiver-Modane-Valfrejus.pdf', tooltip: 'Sports Hiver Modane Valfrejus' },
+{ name: '395', coords: [47.39100, 8.04700], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Aargauer-Ski-Team.pdf', tooltip: 'Aargauer Ski Team' },
+{ name: '396', coords: [46.85300, 9.18600], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Club-Da-Skis-Crap-Sogn-Gion.pdf', tooltip: 'Club Da Skis Crap Sogn Gion' },
+{ name: '397', coords: [46.91600, 9.78940], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Jo-Kublis.pdf', tooltip: 'Jo Kublis' },
+{ name: '398', coords: [47.13500, 8.61200], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Jost-Oberageri.pdf', tooltip: 'Jost Oberägeri' },
+{ name: '399', coords: [47.32100, 8.78900], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/RGZO.pdf', tooltip: 'RGZO' },
+{ name: '400', coords: [46.10860, 7.92890], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Saas-Fee.pdf', tooltip: 'Saas-Fee' },
+{ name: '401', coords: [46.92810, 9.74410], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/SC-Fideris.pdf', tooltip: 'SC Fideris' },
+{ name: '402', coords: [47.17360, 8.58330], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/SC-Finstersee.pdf', tooltip: 'SC Finstersee' },
+{ name: '403', coords: [46.91710, 7.92930], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skiclub-Escholzmatt.pdf', tooltip: 'Skiclub Escholzmatt' },
+{ name: '404', coords: [47.26350, 8.98820], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skiclub-Goldingen.pdf', tooltip: 'Skiclub Goldingen' },
+{ name: '405', coords: [47.41530, 9.24830], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skiclub-Gossau.pdf', tooltip: 'Skiclub Gossau' },
+{ name: '406', coords: [46.40530, 7.22140], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skiclub-Lauenen.pdf', tooltip: 'Skiclub Lauenen' },
+{ name: '407', coords: [47.14000, 7.72000], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skiclub-Walterswil.pdf', tooltip: 'Skiclub Walterswil' },
+{ name: '408', coords: [46.85030, 7.90190], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Skischule-Marbach.pdf', tooltip: 'Skischule Marbach' },
+{ name: '409', coords: [47.37690, 8.54170], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/SVSE.pdf', tooltip: 'SVSE' },
+{ name: '410', coords: [46.77550, 9.20570], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Synchro-Ski-Team-Surselva.pdf', tooltip: 'Synchro Ski Team Surselva' },
+{ name: '411', coords: [46.34860, 7.20420], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Diablerets-Pure-Trace.pdf', tooltip: 'Diablerets Pure Trace' },
+{ name: '412', coords: [46.20440, 6.14320], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Geneve-Snowsports.pdf', tooltip: 'Geneve Snowsports' },
+{ name: '413', coords: [46.80000, 6.65000], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/SAVALE.pdf', tooltip: 'SAVALE' },
+{ name: '414', coords: [46.25970, 6.11010], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Ferney-Voltaire.pdf', tooltip: 'Ski Club Ferney‑Voltaire' },
+{ name: '415', coords: [46.24710, 7.39040], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Grimisuat.pdf', tooltip: 'Ski Club Grimisuat' },
+{ name: '416', coords: [46.34890, 7.01190], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Leysin.pdf', tooltip: 'Ski Club Leysin' },
+{ name: '417', coords: [46.02070, 7.74910], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Swiss-Mountain-Sports.pdf', tooltip: 'Swiss Mountain Sports' },
+{ name: '418', coords: [46.29660, 7.05880], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Villars-Ski-School.pdf', tooltip: 'Villars Ski School' },
+{ name: '419', coords: [46.79480, 7.10350], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Villars-sur-Glane.pdf', tooltip: 'Villars‑sur‑Glâne' },
+{ name: '420', coords: [45.93060, 8.98250], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/GS-Montegeneroso.pdf', tooltip: 'GS Montegeneroso' },
+{ name: '421', coords: [46.60190, 9.95610], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Lyceum-Alpinum-Zuoz.pdf', tooltip: 'Lyceum Alpinum Zuoz' },
+{ name: '422', coords: [47.37690, 8.54170], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/OSNK.pdf', tooltip: 'OSNK' },
+{ name: '423', coords: [46.05900, 8.95800], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Sci-Club-Capriasca.pdf', tooltip: 'Sci Club Capriasca' },
+{ name: '424', coords: [46.00300, 8.84600], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Sci-Club-Monte-Lema.pdf', tooltip: 'Sci Club Monte Lema' },
+{ name: '425', coords: [46.51700, 9.85700], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Scuola-Sci-2000.pdf', tooltip: 'Scuola Sci 2000' },
+{ name: '426', coords: [46.46310, 9.18480], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/Scuola-Sci-San-Bernardino.pdf', tooltip: 'Scuola Sci San Bernardino' },
+{ name: '427', coords: [46.49830, 9.83900], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/02/St-Moritz-Ski-Racing-Academy-Olympia-Bobrun.pdf', tooltip: 'St. Moritz Ski Racing Academy Olympia Bobrun' },
+{ name: '428', coords: [46.83760, 7.89680], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Berghaus-Marbachegg.pdf', tooltip: 'Berghaus Marbachegg' },
+{ name: '429', coords: [46.85200, 9.53000], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Bundner-Skiverband.pdf', tooltip: 'Bündner Skiverband' },
+{ name: '430', coords: [46.47240, 7.28660], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Gstaad-Racing-Camp.pdf', tooltip: 'Gstaad Racing Camp' },
+{ name: '431', coords: [46.98920, 9.41660], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Pizol-Race-Team.pdf', tooltip: 'Pizol Race Team' },
+{ name: '432', coords: [46.92800, 9.71600], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SC-Larein-Jenaz.pdf', tooltip: 'SC Larein Jenaz' },
+{ name: '433', coords: [47.14110, 8.52180], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SC-Oberwil-Zug.pdf', tooltip: 'SC Oberwil Zug' },
+{ name: '434', coords: [46.94400, 10.36270], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SC-Samnaun.pdf', tooltip: 'SC Samnaun' },
+{ name: '435', coords: [46.57110, 7.66630], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Ski-Club-Kandergrund.pdf', tooltip: 'Ski Club Kandergrund' },
+{ name: '436', coords: [46.86830, 9.88100], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SkiClub-Klosters.pdf', tooltip: 'SkiClub Klosters' },
+{ name: '437', coords: [46.74110, 7.56660], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SSC-Erlenbach.pdf', tooltip: 'SSC Erlenbach' },
+{ name: '438', coords: [46.94800, 7.44740], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SSM.pdf', tooltip: 'SSM' },
+{ name: '439', coords: [46.95370, 9.64690], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/SC-und-RG-Grusch-Danusa.pdf', tooltip: 'SC und RG Grüsch‑Danusa' },
+{ name: '440', coords: [46.49270, 9.89700], url: 'https://ch.pietrovitalini.com/wp-content/uploads/2024/07/Sci-Club-Fondo-Pontresina.pdf', tooltip: 'Sci Club Fondo Pontresina' },
+{ name: '441', coords: [52.04000, -0.76050], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Alpine-Performance-Racing.pdf', tooltip: 'Alpine Performance Racing' },
+{ name: '442', coords: [51.50740, -0.12780], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/British-Master-Ski-Team.pdf', tooltip: 'British Master Ski Team' },
+{ name: '443', coords: [53.46700, -2.30000], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/CDC-Performance.pdf', tooltip: 'CDC Performance' },
+{ name: '444', coords: [51.48160, -3.17910], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/08/Dragon-Ski-Team.pdf', tooltip: 'Dragon Ski Team' },
+{ name: '445', coords: [57.14970, -2.09430], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Grampian-Snowsports-Club.pdf', tooltip: 'Grampian Snowsports Club' },
+{ name: '446', coords: [51.33330, -0.40000], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Reeds-Ski-Racing.pdf', tooltip: 'Reeds Ski Racing' },
+{ name: '447', coords: [50.79900, -1.09130], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Royal-Navy-Team.pdf', tooltip: 'Royal Navy Team' },
+{ name: '448', coords: [51.50000, -3.20000], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Snowsport-Cymru-Wales.pdf', tooltip: 'Snowsport Cymru Wales' },
+{ name: '449', coords: [51.55000, -0.19000], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/07/South-Hampstead-High-School.pdf', tooltip: 'South Hampstead High School' },
+{ name: '450', coords: [51.39220, -0.30640], url: 'https://uk.pietrovitalini.com/wp-content/uploads/2024/02/Surbiton-High-School.pdf', tooltip: 'Surbiton High School' },
+{ name: '451', coords: [46.05690, 14.50580], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/Erik-Ski.pdf', tooltip: 'Erik Ski' },
+{ name: '452', coords: [46.05690, 14.50580], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SD-Novinar.pdf', tooltip: 'ŠD Novinar' },
+{ name: '453', coords: [46.16670, 14.30000], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-Alpetour-Loka-Timing.pdf', tooltip: 'SK Alpetour Loka Timing' },
+{ name: '454', coords: [45.98000, 14.03300], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-Javornik.pdf', tooltip: 'SK Javornik' },
+{ name: '455', coords: [45.77560, 14.21420], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-Markin-Postojna.pdf', tooltip: 'SK Markin Postojna' },
+{ name: '456', coords: [45.95440, 13.64810], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-Nova-Gorica.pdf', tooltip: 'SK Nova Gorica' },
+{ name: '457', coords: [46.05690, 14.50580], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-Olimpija.pdf', tooltip: 'SK Olimpija' },
+{ name: '458', coords: [45.57000, 14.24000], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/SK-SNEZNIK.pdf', tooltip: 'SK Snežnik' },
+{ name: '459', coords: [45.32710, 14.44130], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Rijeka.pdf', tooltip: 'Ski Club Rijeka' },
+{ name: '460', coords: [45.81500, 15.98190], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Klub-Zagreb.pdf', tooltip: 'Ski Klub Zagreb' },
+{ name: '461', coords: [46.21400, 14.12250], url: 'https://si.pietrovitalini.com/wp-content/uploads/2024/02/Sportni-Center-Rudno.pdf', tooltip: 'Športni Center Rudno' },
+{ name: '462', coords: [45.36000, 25.54000], url: 'https://ro.pietrovitalini.com/wp-content/uploads/2024/02/CSS-Sinaia.pdf', tooltip: 'CSS Sinaia' },
+{ name: '463', coords: [45.65350, 25.60200], url: 'https://ro.pietrovitalini.com/wp-content/uploads/2024/02/Salvamont.pdf', tooltip: 'Salvamont' },
+{ name: '464', coords: [44.42680, 26.10250], url: 'https://ro.pietrovitalini.com/wp-content/uploads/2024/02/Sport-locker.pdf', tooltip: 'Sport Locker' },
+{ name: '465', coords: [48.14860, 17.10770], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/08/ASC-lyziarsky-klub.pdf', tooltip: 'ASC Lyžiarsky Klub' },
+{ name: '466', coords: [50.77000, 15.42300], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/08/Harranti-Ski-Team-Harrachov.pdf', tooltip: 'Harranti Ski Team Harrachov' },
+{ name: '467', coords: [50.49960, 13.44590], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/08/LYZARSKY-CLUB-JIRKOV.pdf', tooltip: 'Lyžařský Club Jirkov' },
+{ name: '468', coords: [49.07400, 18.87860], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/08/Ski-Team-Martinske-hole.pdf', tooltip: 'Ski Team Martinské hole' },
+{ name: '469', coords: [48.88000, 19.15000], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/08/ZIVELA-CUP.pdf', tooltip: 'Živela Cup' },
+{ name: '470', coords: [50.07550, 14.43780], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/CMLSS.pdf', tooltip: 'CMLSS' },
+{ name: '471', coords: [49.82090, 18.26250], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Penguin-Ski-Club-Ostrava.pdf', tooltip: 'Penguin Ski Club Ostrava' },
+{ name: '472', coords: [49.19510, 16.60680], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/SK-Ideal.pdf', tooltip: 'SK Ideal' },
+{ name: '473', coords: [50.07550, 14.43780], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Lajdacek-Yatch-Club-CERE.pdf', tooltip: 'Ski Lajdacek Yacht Club CERE' },
+{ name: '474', coords: [49.19510, 16.60680], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Akademie-Brno-Kometa-Brno.pdf', tooltip: 'Ski Akademie Brno Kometa Brno' },
+{ name: '475', coords: [50.07550, 14.43780], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Avia-Praha.pdf', tooltip: 'Ski Avia Praha' },
+{ name: '476', coords: [50.40250, 12.52260], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Bublava.pdf', tooltip: 'Ski Club Bublava' },
+{ name: '477', coords: [50.73250, 14.98470], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-klub-Jested.pdf', tooltip: 'Ski klub Ještěd' },
+{ name: '478', coords: [49.19510, 16.60680], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/SKI-KLUB-JUNIOR-BRNO-Victoria-BRNO.pdf', tooltip: 'Ski Klub Junior Brno Victoria Brno' },
+{ name: '479', coords: [49.47530, 18.38890], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Ski-lifts-Bila.pdf', tooltip: 'Ski Lifts Bílá' },
+{ name: '480', coords: [50.69180, 15.73320], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Slovan-Pec.pdf', tooltip: 'Slovan Pec' },
+{ name: '481', coords: [50.06700, 15.00000], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Sun-Ski-School.pdf', tooltip: 'Sun Ski School' },
+{ name: '482', coords: [49.70000, 17.07800], url: 'https://cz.pietrovitalini.com/wp-content/uploads/2024/02/Tatran-Litovel.pdf', tooltip: 'Tatran Litovel' },
+{ name: '483', coords: [42.41570, 1.12920], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/AE-Pallars.pdf', tooltip: 'Associació Esportiva Pallars' },
+{ name: '484', coords: [40.41680, -3.70380], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Mandarina-Sports-Club-Deportivo-Zimas-Esqui-Club-Runnymede-College.pdf', tooltip: 'Mandarina Sports Club Deportivo' },
+{ name: '485', coords: [42.33680, 1.95830], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/CEAP-Club-Esqui-Alpi-Pirineus.pdf', tooltip: 'Club Esquí Alpí Pirineus' },
+{ name: '486', coords: [40.49230, -3.87540], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/CFEM-Ski-Club-Noroeste.pdf', tooltip: 'CFEM' },
+{ name: '487', coords: [40.60430, -3.71600], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-3-Cantos.pdf', tooltip: 'Club Esquí 3 Cantos' },
+{ name: '488', coords: [42.99950, -4.14240], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Skandy-Ski-Club.pdf', tooltip: 'Skandy Ski Club' },
+{ name: '489', coords: [42.98620, -6.32020], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Deportivo-Leitariegos.pdf', tooltip: 'Club Deportivo Leitariegos' },
+{ name: '490', coords: [42.43360, 1.93020], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-desqui-Vall-Ceretana-Cim-Esqui-Club.pdf', tooltip: 'Club d’esquí Vall Ceretana' },
+{ name: '491', coords: [42.56900, -0.54980], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-Jaca-Integral-Ski.pdf', tooltip: 'Club Esquí Jaca' },
+{ name: '492', coords: [41.56360, 2.00890], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-Terrassa.pdf', tooltip: 'Club Esquí Terrassa' },
+{ name: '493', coords: [42.43360, 1.93020], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-desqui-Vall-Ceretana-Cim-Esqui-Club.pdf', tooltip: 'Cim Esquí Club' },
+{ name: '494', coords: [42.69800, 0.79800], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Copos-Skiclub.pdf', tooltip: 'Copos Skiclub' },
+{ name: '495', coords: [42.48500, 1.49100], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Ecole-primaire-Santa-Coloma.pdf', tooltip: 'École primaire Santa Coloma' },
+{ name: '496', coords: [37.09390, -3.39490], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Sierra-Nevada.pdf', tooltip: 'Enjoy Sierra Nevada' },
+{ name: '497', coords: [42.51910, 0.85190], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Escola-Esqui-Vall-de-Boi.pdf', tooltip: 'Escola Esquí Vall de Boí' },
+{ name: '498', coords: [42.55790, 0.52140], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Escuela-de-Esqui-Velarta.pdf', tooltip: 'Escuela de Esquí Velarta' },
+{ name: '499', coords: [37.09390, -3.39490], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Sierra-Nevada.pdf', tooltip: 'Escuela de Ski Universal' },
+{ name: '500', coords: [37.09390, -3.39490], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Sierra-Nevada.pdf', tooltip: 'Happy Ski' },
+{ name: '501', coords: [42.56900, -0.54980], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-Jaca-Integral-Ski.pdf', tooltip: 'Integral Ski' },
+{ name: '502', coords: [42.70160, 0.87390], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Mac-Montanha-Aran-Club.pdf', tooltip: 'Mac Montanha Aran Club' },
+{ name: '503', coords: [40.34500, -3.82700], url: '', tooltip: 'Proyecta Sport' },
+{ name: '504', coords: [40.47190, -3.85810], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Mandarina-Sports-Club-Deportivo-Zimas-Esqui-Club-Runnymede-College.pdf', tooltip: 'Runnymede College' },
+{ name: '505', coords: [42.33600, -7.86400], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/SAFE-Formacion.pdf', tooltip: 'SAFE Formación' },
+{ name: '506', coords: [39.50000, -0.35000], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Club-Esqui-Alboraya.pdf', tooltip: 'Club esquí Alboraya' },
+{ name: '507', coords: [42.31750, 2.36420], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Club-Camprodon.pdf', tooltip: 'Ski Club Camprodon' },
+{ name: '508', coords: [40.49230, -3.87540], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/CFEM-Ski-Club-Noroeste.pdf', tooltip: 'Ski Club Noroeste' },
+{ name: '509', coords: [43.08400, -5.78300], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Pajares-Ski-Club.pdf', tooltip: 'Pajares Ski Club' },
+{ name: '510', coords: [40.41680, -3.70380], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Mandarina-Sports-Club-Deportivo-Zimas-Esqui-Club-Runnymede-College.pdf', tooltip: 'Zimas Esquí Club' },
+{ name: '511', coords: [42.67600, 0.93450], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Ski-Life-Escuela-Baqueira.pdf', tooltip: 'Ski Life Escuela Baqueira' },
+{ name: '512', coords: [42.57190, 1.09130], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/SSIK.pdf', tooltip: 'SSIK – Snow Ski i Kayak' },
+{ name: '513', coords: [42.63240, 1.08830], url: 'https://es.pietrovitalini.com/wp-content/uploads/2024/02/Espot-Esqui-Club.pdf', tooltip: 'Espot Esquí Club' }
+      ];
+
+      // ------------------------------------------------------------------
+      // 4) LAYER TO HOLD PINS — makes it easy to fit bounds later
+      // ------------------------------------------------------------------
+      const group = L.featureGroup().addTo(map);
+
+      // --------------------------------------------------------------
+      // ZOOM-BASED MARKER SIZING (non-linear, bounded)
+      // --------------------------------------------------------------
+      const MIN_Z = 3, MAX_Z = 19; // expected zoom bounds for sizing curve
+      function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+      function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); } // gentle, non-proportional
+      function sizeForZoom(z){
+        const minR = STYLE.markerMinRadius;
+        const maxR = STYLE.markerMaxRadius ?? STYLE.markerRadius;
+        const t = clamp((z - MIN_Z) / (MAX_Z - MIN_Z), 0, 1);
+        const eased = easeOutCubic(t);
+        // Round for crisp rendering
+        return Math.round((minR + (maxR - minR) * eased) * 10) / 10;
+      }
+      function updateMarkerSizes(){
+        const z = map.getZoom();
+        if (typeof z !== 'number') return;
+        const r = sizeForZoom(z);
+        group.eachLayer(layer => { if (layer && layer.setStyle) layer.setStyle({ radius: r }); });
+      }
+      map.on('zoomend', updateMarkerSizes);
+
+      // ------------------------------------------------------------------
+      // 5) HELPER: CREATE ONE PIN (circleMarker) WITH TOOLTIP + POPUP
+      //    Edit this function to globally change how pins look or what shows in the popup.
+      // ------------------------------------------------------------------
+      function addPin(p){
+        // Allow per-pin style overrides while falling back to global STYLE defaults
+        const opts = {
+          // Set initial radius to the current max; it will be adjusted after fit/zoom via updateMarkerSizes()
+          radius: p?.style?.radius ?? (STYLE.markerMaxRadius ?? STYLE.markerRadius),
+          color:  p?.style?.stroke ?? STYLE.markerStroke,
+          weight: p?.style?.weight ?? STYLE.markerStrokeWidth,
+          fillColor: p?.style?.fill ?? STYLE.markerFill,
+          fillOpacity: p?.style?.fillOpacity ?? STYLE.markerFillOpacity
+        };
+
+        const marker = L.circleMarker(p.coords, opts).addTo(group);
+
+        // --- HOVER LABEL (tooltip) ---
+        // Shows city/team name on hover. Set permanent:true to keep labels always visible.
+        const tipText = p.tooltip || p.name;
+        marker.bindTooltip(tipText, {
+          direction: 'top',
+          offset: [0, -8],
+          opacity: 0.95
+          // permanent: true
+        });
+
+        // --- CLICK ACTION ---
+        // Open the pin's link in a NEW TAB immediately on click.
+        // If no url is provided, it falls back to Wikipedia as a placeholder.
+        marker.on('click', () => {
+          const url = (typeof p.url === 'string' && p.url.trim()) ? p.url : 'https://www.wikipedia.org/';
+          window.open(url, '_blank', 'noopener');
+        });
+
+        // Keep hovered marker on top visually
+        marker.on('mouseover', () => marker.bringToFront());
+        return marker;
+      }
+
+      // Add all pins
+      items.forEach(addPin);
+
+      // ------------------------------------------------------------------
+      // 6) FIT THE MAP TO YOUR PINS (or set a fixed center/zoom)
+      // ------------------------------------------------------------------
+      if (group.getLayers().length) {
+        // Pad expands the view a bit so markers are not at the very edges
+        map.fitBounds(group.getBounds().pad(0.2));
+      } else {
+        // Fallback center (Northern Italy) if no pins present
+        map.setView([45.5, 9.0], 6);
+      }
+      // After the initial view/fit, size pins for the current zoom
+      updateMarkerSizes();
+
+      // Keep map responsive when the container resizes
+      addEventListener('resize', () => map.invalidateSize());
+
+      // ------------------------------------------------------------------
+      // 7) UTILS — HTML escaping to prevent broken markup if names/urls contain symbols
+      // ------------------------------------------------------------------
+      function escapeHtml(s){
+        return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+      }
+      function escapeAttr(s){
+        // Conservative attribute escaping
+        return String(s).replace(/["'<>&]/g, c => ({'"':'&quot;','\'':'&#39;','<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+      }
+
+      // Log for sanity
+      console.log('Leaflet ready:', L.version, 'Pins:', items.length);
+    });
+  </script>
+</body>
+</html>
