@@ -728,12 +728,9 @@
       // ------------------------------------------------------------------
       // 6) FIT THE MAP TO YOUR PINS (or set a fixed center/zoom)
       // ------------------------------------------------------------------
-      if (group.getLayers().length) {
-        // Pad expands the view a bit so markers are not at the very edges
-        map.fitBounds(group.getBounds().pad(0.2));
-      } else {
-        // Fallback center (Northern Italy) if no pins present
-        map.setView([45.5, 9.0], 6);
+      // Start centered on Europe no matter what
+map.setView([54.5, 15.0], 4);
+updateMarkerSizes();
       }
       // After the initial view/fit, size pins for the current zoom
       updateMarkerSizes();
